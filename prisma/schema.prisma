@@ -1,0 +1,332 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+}
+
+// Enums 
+
+enum UserRole {
+  ADMIN
+  BUSINESS
+  RIDER
+  CUSTOMER
+}
+
+enum VehicleType {
+  BIKE
+  MOTORCYCLE
+  CAR
+  VAN
+}
+
+enum DeliveryStatus {
+  CREATED
+  PENDING
+  RIDER_ASSIGNED
+  ACCEPTED
+  PICKED_UP
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  FAILED
+  RETURNED
+  RESCHEDULED
+}
+
+enum DeliveryType {
+  STANDARD
+  EXPRESS
+}
+
+enum DeliveryPriority {
+  LOW
+  NORMAL
+  HIGH
+}
+
+enum ProofMethod {
+  OTP
+  SIGNATURE
+  PHOTO
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+// ── Core identity ─────────────────────────────────────────────────
+
+// FR-001/FR-002 — shared account/auth fields across all roles
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  phone         String   @unique
+  passwordHash  String
+  role          UserRole
+  isPhoneVerified Boolean @default(false)
+  isEmailVerified Boolean @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  rider    Rider?
+  business Business?
+  customer Customer?
+
+  otpCodes     OtpCode[]
+  notifications Notification[]
+
+  @@map("users")
+}
+
+model OtpCode {
+  id        String   @id @default(cuid())
+  userId    String
+  code      String
+  purpose   String   // "verify_phone" | "password_reset"
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("otp_codes")
+}
+
+// ── Business (FR-003) ─────────────────────────────────────────────
+
+model Business {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  businessName       String
+  businessType       String?
+  address            String?
+  isVerified         Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries Delivery[]
+
+  @@map("businesses")
+}
+
+// ── Customer ──────────────────────────────────────────────────────
+
+model Customer {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries Delivery[]
+
+  @@map("customers")
+}
+
+// ── Rider (FR-004) ────────────────────────────────────────────────
+
+model Rider {
+  id                       String      @id @default(cuid())
+  userId                   String      @unique
+  name                     String
+  photoUrl                 String?
+  address                  String?
+  vehicleType              VehicleType?
+  plateNumber              String?
+  vehicleCapacityKg        Float?
+  isVerified               Boolean     @default(false)
+  isAvailable              Boolean     @default(false)
+  currentLatitude          Float?
+  currentLongitude         Float?
+  bankName                 String?
+  bankAccountNumber        String?
+  bankAccountName          String?
+  createdAt                DateTime    @default(now())
+  updatedAt                DateTime    @updatedAt
+
+  user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documents        RiderDocument[]
+  deliveries       Delivery[]
+  locationPings    LocationPing[]
+  earningsEntries  EarningsEntry[]
+
+  @@map("riders")
+}
+
+model RiderDocument {
+  id           String   @id @default(cuid())
+  riderId      String
+  documentType String   // drivers_license | vehicle_registration | national_id
+  fileUrl      String
+  status       String   @default("pending") // pending | approved | rejected
+  uploadedAt   DateTime @default(now())
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId])
+  @@map("rider_documents")
+}
+
+// ── Delivery (FR-006 through FR-013) ─────────────────────────────
+
+model Delivery {
+  id          String   @id @default(cuid())
+  trackingId  String   @unique // e.g. LD-2026-000128
+
+  businessId  String
+  customerId  String?
+  riderId     String?
+
+  pickupName      String
+  pickupPhone     String
+  pickupAddress   String
+  pickupLatitude  Float
+  pickupLongitude Float
+
+  dropoffName      String
+  dropoffPhone     String
+  dropoffAddress   String
+  dropoffLatitude  Float
+  dropoffLongitude Float
+
+  packageDescription String
+  packageQuantity    Int      @default(1)
+  packageWeightKg    Float?
+
+  deliveryType     DeliveryType     @default(STANDARD)
+  priority         DeliveryPriority @default(NORMAL)
+  status           DeliveryStatus   @default(CREATED)
+
+  fee            Int // smallest currency unit (kobo)
+  riderEarnings  Int
+  distanceKm     Float?
+  etaWindowStart String?
+  etaWindowEnd   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id])
+  customer Customer? @relation(fields: [customerId], references: [id])
+  rider    Rider?    @relation(fields: [riderId], references: [id])
+
+  statusHistory  DeliveryStatusHistory[]
+  proofOfDelivery ProofOfDelivery?
+  payment         Payment?
+  locationPings   LocationPing[]
+
+  @@index([riderId, status])
+  @@index([businessId])
+  @@map("deliveries")
+}
+
+// FR-010 — full audit trail of every status change
+model DeliveryStatusHistory {
+  id         String         @id @default(cuid())
+  deliveryId String
+  status     DeliveryStatus
+  timestamp  DateTime       @default(now())
+  note       String?
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId])
+  @@map("delivery_status_history")
+}
+
+// FR-011 — GPS tracking pings
+model LocationPing {
+  id         String   @id @default(cuid())
+  deliveryId String?
+  riderId    String
+  latitude   Float
+  longitude  Float
+  timestamp  DateTime @default(now())
+
+  delivery Delivery? @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+  rider    Rider     @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId])
+  @@index([riderId])
+  @@map("location_pings")
+}
+
+// FR-013 — proof of delivery
+model ProofOfDelivery {
+  id            String      @id @default(cuid())
+  deliveryId    String      @unique
+  method        ProofMethod
+  otpCode       String?
+  photoUrl      String?
+  signatureUrl  String?
+  recipientName String?
+  latitude      Float?
+  longitude     Float?
+  capturedAt    DateTime    @default(now())
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@map("proof_of_delivery")
+}
+
+// ── Payments (Section 20) ─────────────────────────────────────────
+
+model Payment {
+  id            String        @id @default(cuid())
+  deliveryId    String        @unique
+  businessId    String
+  amount        Int
+  currency      String        @default("NGN")
+  status        PaymentStatus @default(PENDING)
+  provider      String?       // e.g. "paystack"
+  providerRef   String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+// Denormalized rider earnings ledger — powers /riders/me/earnings without
+// re-aggregating every delivery on each request.
+model EarningsEntry {
+  id         String   @id @default(cuid())
+  riderId    String
+  deliveryId String?
+  amount     Int
+  note       String?
+  createdAt  DateTime @default(now())
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId, createdAt])
+  @@map("earnings_entries")
+}
+
+// ── Notifications (FR-014) ────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  body      String
+  type      String   // delivery_created | rider_assigned | delivered | etc.
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
