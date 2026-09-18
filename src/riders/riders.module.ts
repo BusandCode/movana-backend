@@ -4,6 +4,6 @@ import { RidersController } from './riders.controller.js';
 
 @Module({
   providers: [RidersService],
-  controllers: [RidersController]
+  controllers: [RidersController],
 })
 export class RidersModule {}

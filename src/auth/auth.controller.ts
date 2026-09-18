@@ -9,12 +9,14 @@ export class AuthController {
 
   @Post('register')
   async register(@Body() dto: RegisterDto) {
-    return this.authService.register(dto);
+    const result = await this.authService.register(dto);
+    return { success: true, data: result };
   }
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: LoginDto) {
-    return this.authService.login(dto);
+    const result = await this.authService.login(dto);
+    return { success: true, data: result };
   }
 }

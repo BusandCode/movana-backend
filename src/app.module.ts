@@ -22,6 +22,6 @@ import { AiModule } from './ai/ai.module.js';
     AiModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService],  // ✅ NO APP_GUARD
 })
 export class AppModule {}

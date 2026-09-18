@@ -5,6 +5,8 @@ import * as bcrypt from 'bcrypt';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 
+const isDev = process.env.NODE_ENV !== 'production';
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -16,8 +18,7 @@ export class AuthService {
 
   async register(dto: RegisterDto) {
     try {
-      this.logger.log(`Registering user: ${dto.email}`);
-      
+      // Check if user exists with email or phone
       const existingUser = await this.prisma.client.user.findFirst({
         where: {
           OR: [{ email: dto.email }, { phone: dto.phone }],
@@ -25,12 +26,12 @@ export class AuthService {
       });
 
       if (existingUser) {
-        this.logger.warn(`User already exists: ${dto.email}`);
-        throw new ConflictException('User already exists');
+        const field = existingUser.email === dto.email ? 'email' : 'phone number';
+        // Expected outcome, not an error — no stack trace needed
+        throw new ConflictException(`A user with this ${field} already exists. Please login instead.`);
       }
 
       const hashedPassword = await bcrypt.hash(dto.password, 10);
-      this.logger.log('Password hashed successfully');
 
       const user = await this.prisma.client.user.create({
         data: {
@@ -51,16 +52,16 @@ export class AuthService {
         },
       });
 
-      this.logger.log(`User created successfully: ${user.id}`);
-
-      const token = this.jwtService.sign({ 
-        sub: user.id, 
-        email: user.email, 
-        role: user.role 
+      const token = this.jwtService.sign({
+        sub: user.id,
+        email: user.email,
+        role: user.role,
       });
 
+      this.logger.log(`User registered: ${user.id}`);
+
       return {
-        message: 'Registration successful',
+        message: 'Registration successful! Welcome to Movana.',
         token,
         user: {
           id: user.id,
@@ -71,21 +72,24 @@ export class AuthService {
         },
       };
     } catch (error: any) {
-      this.logger.error(`Registration error: ${error.message}`);
-      this.logger.error(error.stack);
-      
       if (error instanceof ConflictException || error instanceof UnauthorizedException) {
+        if (isDev) this.logger.debug(`Registration rejected: ${error.message}`);
         throw error;
       }
-      
-      throw new InternalServerErrorException(`Registration failed: ${error.message}`);
+
+      if (error.code === 'P2002') {
+        if (isDev) this.logger.debug(`Registration conflict (P2002): ${dto.email}`);
+        throw new ConflictException('A user with this email or phone number already exists.');
+      }
+
+      // Genuinely unexpected — worth the full stack
+      this.logger.error(`Registration failed: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Registration failed. Please try again later.');
     }
   }
 
   async login(dto: LoginDto) {
     try {
-      this.logger.log(`Login attempt: ${dto.phoneOrEmail}`);
-      
       const user = await this.prisma.client.user.findFirst({
         where: {
           OR: [{ email: dto.phoneOrEmail }, { phone: dto.phoneOrEmail }],
@@ -95,28 +99,21 @@ export class AuthService {
         },
       });
 
-      if (!user) {
-        this.logger.warn(`User not found: ${dto.phoneOrEmail}`);
-        throw new UnauthorizedException('Invalid credentials');
+      if (!user || !(await bcrypt.compare(dto.password, user.passwordHash))) {
+        if (isDev) this.logger.debug(`Login rejected: ${dto.phoneOrEmail}`);
+        throw new UnauthorizedException('Invalid email/phone or password. Please try again.');
       }
 
-      const isPasswordValid = await bcrypt.compare(dto.password, user.passwordHash);
-
-      if (!isPasswordValid) {
-        this.logger.warn(`Invalid password for user: ${dto.phoneOrEmail}`);
-        throw new UnauthorizedException('Invalid credentials');
-      }
-
-      const token = this.jwtService.sign({ 
-        sub: user.id, 
-        email: user.email, 
-        role: user.role 
+      const token = this.jwtService.sign({
+        sub: user.id,
+        email: user.email,
+        role: user.role,
       });
 
-      this.logger.log(`Login successful: ${user.id}`);
+      this.logger.log(`Login: ${user.id}`);
 
       return {
-        message: 'Login successful',
+        message: 'Login successful! Welcome back.',
         token,
         user: {
           id: user.id,
@@ -127,14 +124,13 @@ export class AuthService {
         },
       };
     } catch (error: any) {
-      this.logger.error(`Login error: ${error.message}`);
-      this.logger.error(error.stack);
-      
       if (error instanceof UnauthorizedException) {
         throw error;
       }
-      
-      throw new InternalServerErrorException(`Login failed: ${error.message}`);
+
+      // Genuinely unexpected — worth the full stack
+      this.logger.error(`Login failed: ${error.message}`, error.stack);
+      throw new InternalServerErrorException('Login failed. Please try again later.');
     }
   }
 }
